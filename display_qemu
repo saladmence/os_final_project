@@ -1,0 +1,31 @@
+set -e
+
+# run_qemu with a display for keyboard and mouse input
+# QEMU's screen is served over VNC on localhost
+#   windows: TigerVNC -> localhost:{port}
+#   mac: finder -> go -> connect to server (cmd k) -> vnc://localhost:{port}
+# default port is 5957 for VNC_DISPLAY
+#
+# Usage: ./display_qemu [test], default: input, from TESTS_DIR=input_tests
+
+TEST=${1:-input}
+export TESTS_DIR=${TESTS_DIR:-input_tests}
+VNC_DISPLAY=${VNC_DISPLAY:-57}
+VNC_PORT=$((5900 + VNC_DISPLAY))
+
+UTCS_OPTS=-O3 make -s $TEST
+
+echo "VNC on 127.0.0.1:$VNC_PORT"
+echo "  from your machine: ssh -L $VNC_PORT:localhost:$VNC_PORT $(whoami)@$(hostname -f)"
+echo "  (or forward port $VNC_PORT in VS Code's Ports tab)"
+echo "  then point a VNC viewer at localhost:$VNC_PORT"
+
+time `make -s qemu_cmd` `make -s qemu_config_flags` \
+             -no-reboot \
+             --monitor none \
+             -display none \
+             -vnc 127.0.0.1:$VNC_DISPLAY \
+             `make -s $TEST.qemu_disk_flags` \
+             -serial stdio \
+             `make -s $TEST.qemu_console_flags` \
+             -device isa-debug-exit,iobase=0xf4,iosize=0x04 || true

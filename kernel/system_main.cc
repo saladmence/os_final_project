@@ -23,6 +23,7 @@
 #include "memory/vmm.h"
 #include "machine/x86_64.h"
 #include <cstdint>
+#include "io/ps2.h"
 
 using namespace limine;
 
@@ -144,9 +145,10 @@ extern "C" [[noreturn]] void system_main(void) {
   ////////////////////////////////
   // Initialize the kernel heap //
   ////////////////////////////////
-
+  
   heap::init(uintptr_t(the_heap), sizeof(the_heap));
-
+  
+  PS2::init();
   ///////////////////////////////////////////////////////////////////////////
   // Run global initializers -- has to be done after initializing the heap //
   ///////////////////////////////////////////////////////////////////////////
