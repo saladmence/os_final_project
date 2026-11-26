@@ -13,7 +13,7 @@ uint64_t dropped_events();
 sync<uint64_t> read_events(char *buf, uint64_t len, bool nonblocking = false);
 
 enum class Type : uint64_t {
-    KEYBOARD = 1, BUTTON = 2, MOTION = 3
+    KEYBOARD = 1, BUTTON = 2, MOTION = 3, SCROLL = 4
 };
 
 struct Event {

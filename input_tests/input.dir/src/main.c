@@ -42,7 +42,8 @@ static void print_event(const struct input_event *event) {
     const char *kind =
         event->type == 1 ? "key" :
         event->type == 2 ? "button" :
-        event->type == 3 ? "motion" : "unknown";
+        event->type == 3 ? "motion" :
+        event->type == 4 ? "scroll" : "unknown";
 
     print_text(kind);
     print_text(" code=");

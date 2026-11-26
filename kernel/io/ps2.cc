@@ -59,6 +59,39 @@ uint8_t read_data() {
     return inb(DATA);
 }
 
+uint8_t mouse_packet_size = 0;
+bool read_mouse_reply(uint8_t &reply){
+    for(uint64_t i = 0; i < MAX_TRIES; i++){
+        uint8_t status = inb(STATUS);
+        if(!(status & 0x01)) continue;
+
+        uint8_t data = inb(DATA);
+
+        if((status & 0xC0) || !(status & 0x20)) return false;
+
+        reply = data;
+        return true;
+    }
+
+    return false;
+}
+
+bool mouse_command(uint8_t byte){
+    if(!wait_then_write()) return false;
+    outb(COMMAND, 0xD4);
+
+    if(!wait_then_write()) return false;
+    outb(DATA, byte);
+
+    uint8_t reply = 0;
+    return read_mouse_reply(reply) && reply == 0xFA;
+}
+
+bool set_mouse_rate(uint8_t rate){
+    return mouse_command(0xF3) && mouse_command(rate);
+}
+
+
 } // namespace
 
 void PS2::init() {
@@ -73,26 +106,32 @@ void PS2::init() {
   uint8_t config = read_data();
 
   config &= ~(0x01 | 0x02); // interrupts off
-  config &= ~(0x10 | 0x20); // clocks on
+  config &= ~0x20; // mouse clock enabled.
+  config |= 0x10;  // keep keyboard disabled during mouse setup.
   config |= 0x40; // translation on
 
   send_cmd(0x60);
   send_data(config);
 
   send_cmd(0xA8); // turn on mouse
-
-  // testing mouse sending works
-  send_cmd(0xD4);
-  send_data(0xF6); // reset settings to default
-  uint8_t ack = read_data();
-  KPRINT("mouse ack ?\n", ack);
-
-  send_cmd(0xD4);
-  send_data(0xF4); // send me movement
-  ack = read_data();
-  KPRINT("mouse ack ?\n", ack);
-
-  send_cmd(0xAE);
+  uint8_t id = 0;
+  bool ok =
+      mouse_command(0xF6) && // Defaults; reporting disabled.
+      set_mouse_rate(200) &&
+      set_mouse_rate(100) &&
+      set_mouse_rate(80) &&
+      mouse_command(0xF2) && // Request device ID.
+      read_mouse_reply(id);
+  
+  // Accept ordinary mice and the wheel mode we understand.
+  if(ok && (id == 0 || id == 3) && mouse_command(0xF4)){
+      mouse_packet_size = (id == 3) ? 4 : 3;
+      KPRINT("ps2: mouse id ? packet size ?\n", id, Dec(mouse_packet_size));
+  } else{
+      KPRINT("ps2: mouse setup failed\n");
+  }
+  
+  send_cmd(0xAE); // Enable keyboard.
 }
 
 void PS2::decode_keyboard(uint8_t byte) {
@@ -115,10 +154,11 @@ void PS2::decode_keyboard(uint8_t byte) {
 }
 
 void PS2::decode_mouse(uint8_t byte) {
+    // check if mouse is disabled
+    if(mouse_packet_size == 0) return;
     // TODO: lock these if we have multiple cores
-    // TODO: no scrolling atm
     static uint8_t packet_no = 0;
-    static uint8_t packet[3];
+    static uint8_t packet[4];
     static uint8_t prev_buttons = 0;
 
     // out of sync check
@@ -129,8 +169,9 @@ void PS2::decode_mouse(uint8_t byte) {
 
     packet[packet_no] = byte;
     packet_no++;
-    if (packet_no < 3) return;
+    if (packet_no < mouse_packet_size) return;
     packet_no = 0;
+
 
     uint8_t flags = packet[0];
 
@@ -154,6 +195,14 @@ void PS2::decode_mouse(uint8_t byte) {
         if (changed & (1 << i)) handle_event(Event{Type::BUTTON, i, (buttons & (1 << i)) ? 1 : 0});
     }
     prev_buttons = buttons;
+
+    if(mouse_packet_size == 4){
+        int16_t wheel = packet[3];
+    
+        // sign extend the full fourth byte for mouse ID 3.
+        if(wheel & 0x80) wheel -= 256;
+        if(wheel != 0) handle_event(Event{Type::SCROLL, 0, -wheel});
+    }
 }
 
 async<void> PS2::poll() {
