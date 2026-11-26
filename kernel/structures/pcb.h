@@ -28,6 +28,7 @@
 #include "async/event.h"
 #include "io/console.h"
 #include "memory/vmm.h"
+#include "io/ps2.h"
 
 namespace impl
 {
@@ -35,7 +36,7 @@ class AddressSpace;
 struct TCB;
 bool current_thread_dead();
 
-enum FileType { SEEKING, CONSOLE, PIPE };
+enum FileType { SEEKING, CONSOLE, PIPE, INPUT };
 
 class SeekingFile;
 
@@ -54,6 +55,21 @@ public:
     SeekingFile* seeking() { return type == SEEKING ? (SeekingFile*)this : nullptr; }
     virtual sync<uint64_t> read(char *buf, uint64_t len);
     virtual sync<uint64_t> write(char *buf, uint64_t len);
+};
+
+class InputFile : public OpenFile {
+    bool nonblocking;
+
+public:
+    explicit InputFile(bool nonblocking) : OpenFile(INPUT, true, false), nonblocking(nonblocking) {}
+
+    sync<uint64_t> read(char *buf, uint64_t len) override{
+        co_return co_await PS2::read_events(buf, len, nonblocking);
+    }
+
+    sync<uint64_t> write(char *, uint64_t) override{
+        co_return Syscall::EBADF;
+    }
 };
 
 class SeekingFile : public OpenFile {

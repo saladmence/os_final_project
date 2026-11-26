@@ -5,6 +5,9 @@
 #include <cstdint>
 #include "async/async.h"
 #include "ps2_keymap.h"
+#include "async/event.h"
+#include "structures/pcb.h"
+#include "syscall.h"
 
 namespace {
 
@@ -12,6 +15,15 @@ constexpr uint16_t DATA = 0x60;
 constexpr uint16_t STATUS = 0x64;
 constexpr uint16_t COMMAND = 0x64;
 constexpr uint64_t MAX_TRIES = 1000000;
+constexpr uint64_t INPUT_CAPACITY = 256;
+
+input_event input_ring[INPUT_CAPACITY]{};
+uint64_t input_head = 0;
+uint64_t input_count = 0;
+uint64_t input_dropped = 0;
+
+SpinLock input_lock;
+::Event input_available;
 
 bool wait_then_write() {
     for (uint64_t i = 0; i < MAX_TRIES; i++) {
@@ -148,7 +160,9 @@ async<void> PS2::poll() {
     // TODO: loop never ends, havent decided how we know when to exit
     while (true) {
         uint8_t status_byte = inb(STATUS);
-        if (!(status_byte & 0x01)) co_await yield();
+        if(!(status_byte & 0x01)){
+            co_await impl::sleep_until(rdtsc() + (Sys::tsc_hz + 999) / 1000);
+        }
         else {
             uint8_t data_byte = inb(DATA);
             if (status_byte & 0x20) decode_mouse(data_byte);
@@ -158,12 +172,57 @@ async<void> PS2::poll() {
     
 }
 
-// TODO: for ringbuffer, rn it prints but u can modify it to send the event to the ringbuffer
 void PS2::handle_event(Event event) {
-    const char* type = "unknown";
-    if (event.type == Type::KEYBOARD) type = "key";
-    else if (event.type == Type::BUTTON) type = "button";
-    else if (event.type == Type::MOTION) type = "motion";
+    LockGuard guard{input_lock};
+    if (input_count == INPUT_CAPACITY){
+        input_dropped++;
+        return;
+    }
 
-    KPRINT("ps2: event ? code ? value ?\n", type, Dec(event.code), Dec(event.value));
+    uint64_t tail = (input_head+input_count)%INPUT_CAPACITY;
+
+    input_ring[tail] = input_event{(uint16_t)(event.type), event.code, event.value};
+
+    input_count++;
+    input_available.trigger();
+}
+
+bool PS2::events_ready() {
+    LockGuard guard{input_lock};
+    return input_count != 0;
+}
+
+uint64_t PS2::dropped_events() {
+    LockGuard guard{input_lock};
+    return input_dropped;
+}
+
+sync<uint64_t> PS2::read_events(char *buf, uint64_t len, bool nonblocking) {
+    if(len == 0) co_return 0;
+
+    if(len%sizeof(input_event) != 0){
+        co_return Syscall::EINVAL;
+    }
+
+    LockGuard guard{input_lock};
+    while(input_count == 0){
+        if(nonblocking) co_return Syscall::EAGAIN;
+
+        co_await input_available.wait(input_lock);
+
+        if(impl::current_thread_dead()) co_return 0;
+    }
+
+    uint64_t limit = len/sizeof(input_event);
+    uint64_t copied = 0;
+
+    while(copied < limit && input_count != 0) {
+        memcpy(buf + copied*sizeof(input_event), &input_ring[input_head], sizeof(input_event));
+
+        input_head = (input_head+1)%INPUT_CAPACITY;
+        input_count--;
+        copied++;
+    }
+
+    co_return copied * sizeof(input_event);
 }

@@ -32,6 +32,7 @@ constexpr uint64_t READ = 0;         // read(fd, buf, len), files and console
 constexpr uint64_t WRITE = 1;        // write(fd, buf, len), to the console
 constexpr uint64_t OPEN = 2;         // open(path, flags, mode)
 constexpr uint64_t CLOSE = 3;        // close(fd)
+constexpr uint64_t POLL = 7;
 constexpr uint64_t LSEEK = 8;        // lseek(fd, offset, whence)
 constexpr uint64_t MMAP = 9;         // mmap(addr, length, prot, flags, fd,
                                      //      offset), anonymous or MAP_PRIVATE
@@ -77,6 +78,7 @@ constexpr uint64_t O_CREAT      = 00000100;
 constexpr uint64_t O_EXCL       = 00000200;
 constexpr uint64_t O_TRUNC      = 00001000;
 constexpr uint64_t O_APPEND     = 00002000;
+constexpr uint64_t O_NONBLOCK   = 00004000;
 constexpr uint64_t O_DIRECT     = 00040000;
 constexpr uint64_t O_DIRECTORY  = 00200000;
 constexpr uint64_t O_NOFOLLOW   = 00400000;

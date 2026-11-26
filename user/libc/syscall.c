@@ -18,6 +18,7 @@
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <poll.h>
 
 #include "pthread_impl.h"
 
@@ -52,6 +53,10 @@ ssize_t read(int fd, void *buf, size_t count) {
 
 ssize_t write(int fd, const void *buf, size_t count) {
   return syscall(SYS_write, fd, (long)buf, (long)count, 0, 0, 0);
+}
+
+int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
+    return (int)syscall(SYS_poll, (long)fds, (long)nfds, timeout, 0, 0, 0);
 }
 
 int close(int fd) { return (int)syscall(SYS_close, fd, 0, 0, 0, 0, 0); }

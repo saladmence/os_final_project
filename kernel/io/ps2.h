@@ -2,8 +2,15 @@
 
 #include <cstdint>
 #include "async/async.h"
+#include "async/sync.h"
+#include "user/libc/include/input_event.h"
 
 namespace PS2 {
+
+bool events_ready();
+uint64_t dropped_events();
+
+sync<uint64_t> read_events(char *buf, uint64_t len, bool nonblocking = false);
 
 enum class Type : uint64_t {
     KEYBOARD = 1, BUTTON = 2, MOTION = 3

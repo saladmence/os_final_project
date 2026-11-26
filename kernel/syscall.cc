@@ -24,6 +24,7 @@
 #include "memory/physmem.h"
 #include "async/sync.h"
 #include "machine/x86_64.h"
+#include "user/libc/include/poll.h"
 
 #include <utility>
 
@@ -259,6 +260,69 @@ uint32_t futex_wake(FutexKey key, uint32_t count) {
   return woke;
 }
 
+sync<uint64_t> poll_input_fds(TCB *t, uintptr_t user_fds, uint64_t nfds, int timeout) {
+    if(nfds > impl::FileDescriptorTable::MAX_FDS) co_return Syscall::EINVAL;
+
+    struct Storage {
+        pollfd* data;
+        ~Storage() { delete[] data; }
+    } storage{nfds ? new pollfd[nfds] : nullptr};
+
+    auto* fds = storage.data;
+    uint64_t bytes = nfds * sizeof(pollfd);
+
+    if(nfds && !read_user(fds, (void *)user_fds, bytes)) co_return Syscall::EFAULT;
+
+    uint64_t step =std::max<uint64_t>(1, (Sys::tsc_hz + 999) / 1000);
+    uint64_t deadline = 0;
+
+    if(timeout > 0){
+        uint64_t duration;
+
+        if(__builtin_mul_overflow(uint64_t(timeout), step, &duration) || __builtin_add_overflow(rdtsc(), duration, &deadline)){
+            co_return Syscall::EINVAL;
+        }
+    }
+
+    while(true){
+        if (impl::current_thread_dead()) co_return 0;
+
+        uint64_t ready = 0;
+        for(uint64_t i = 0; i < nfds; i++){
+            fds[i].revents = 0;
+
+            if(fds[i].fd < 0) continue;
+
+            auto file = t->process->fd_table.get(fds[i].fd);
+
+            if(file == nullptr){
+                fds[i].revents = POLLNVAL;
+            } else if(file->type == impl::INPUT){
+                if(PS2::events_ready()){
+                    fds[i].revents = fds[i].events & POLLIN;
+                }
+            } else{
+                co_return Syscall::ENOSYS;
+            }
+
+            if (fds[i].revents != 0) ++ready;
+        }
+
+        uint64_t now = rdtsc();
+
+        if(ready || timeout == 0 || (timeout > 0 && now >= deadline)){
+            if(nfds && !write_user((void *)user_fds, fds, bytes)) co_return Syscall::EFAULT;
+            co_return ready;
+        }
+
+        uint64_t wake = now + step;
+
+        if(timeout > 0) wake = std::min(wake, deadline);
+
+        co_await impl::sleep_until(wake);
+    }
+}
+
 sync<uint64_t> dispatch(TCB *t) {
   UserContext &c = t->context;
   switch (c.rax) {
@@ -301,6 +365,9 @@ sync<uint64_t> dispatch(TCB *t) {
     if (!file->wr) co_return Syscall::EBADF;
 
     co_return co_await buffered_io(file.operator->(), buf, len, true);
+  }
+  case Syscall::POLL: {
+      co_return co_await poll_input_fds(t, c.rdi, c.rsi, int32_t(c.rdx));
   }
   case Syscall::SCHED_YIELD: {
     co_await yield();
@@ -537,6 +604,19 @@ sync<uint64_t> dispatch(TCB *t) {
 
     bool read = (flags & 0b11) != Syscall::O_WRONLY;
     bool write = (flags & 0b11) != Syscall::O_RDONLY;
+
+    if(streq(path, "/dev/input0")){
+        if((flags & 0b11) != Syscall::O_RDONLY) co_return Syscall::EACCES;
+        if(flags & Syscall::O_DIRECTORY) co_return Syscall::ENOTDIR;
+    
+        constexpr uint64_t allowed_flags = Syscall::O_NONBLOCK | Syscall::O_CLOEXEC;
+    
+        if(flags & ~allowed_flags) co_return Syscall::EINVAL;
+    
+        StrongRef<impl::OpenFile> input{new impl::InputFile((flags & Syscall::O_NONBLOCK) != 0)};
+    
+        co_return t->process->fd_table.open(input, (flags & Syscall::O_CLOEXEC) != 0);
+    }
 
     StrongRef<Node> dir = t->process->get_cwd();
     if (path[0] != '/' && dir_fd != Syscall::AT_FDCWD) {
