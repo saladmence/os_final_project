@@ -31,12 +31,14 @@
 #include "lib/print.h"
 #include "filesystem/ramdisk.h"
 #include "lib/shared.h"
+#include "io/ps2.h"
 
 namespace impl { StrongRef<Ext2> fs; }
 
 using namespace impl;
 
 async<void> kernel_main() {
+    PS2::poll();
     StrongRef<BlockIO> ide{new RamDisk(0)};
     fs = co_await Ext2::mount(ide);
 
